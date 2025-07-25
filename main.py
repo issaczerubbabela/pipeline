@@ -34,8 +34,12 @@ def run_streamlit_app():
     print("🔗 URL: http://localhost:8501")
     print("🛑 Press Ctrl+C to stop the application")
     
+    # Use the same Python executable that's running this script
+    python_executable = sys.executable
+    print(f"Using Python: {python_executable}")
+    
     subprocess.run([
-        sys.executable, "-m", "streamlit", "run", 
+        python_executable, "-m", "streamlit", "run", 
         str(app_path), "--server.port=8501"
     ])
 
@@ -143,14 +147,43 @@ def run_cli_mode():
     finally:
         pipeline.stop()
 
+def run_demo_mode():
+    """Run demo mode to generate lineage events"""
+    print("🎯 Demo Mode - Generating Lineage Events")
+    
+    try:
+        from generate_lineage_demo import quick_lineage_demo, demo_lineage_generation
+        
+        print("\nChoose demo type:")
+        print("1. Quick Demo - Load sample data (generates ~2 lineage events)")
+        print("2. Full Demo - Complete pipeline (generates ~6+ lineage events)")
+        
+        choice = input("Enter choice (1 or 2): ").strip()
+        
+        if choice == "1":
+            pipeline = quick_lineage_demo()
+        elif choice == "2":
+            pipeline = demo_lineage_generation()
+        else:
+            print("Invalid choice, running quick demo...")
+            pipeline = quick_lineage_demo()
+        
+        print(f"\n🎉 Demo completed!")
+        print("💡 You can now start the web application to view the lineage events:")
+        print("   python main.py --mode web")
+        
+    except Exception as e:
+        print(f"❌ Demo failed: {str(e)}")
+        raise
+
 def main():
     """Main application entry point"""
     parser = argparse.ArgumentParser(description="Bank Reconciliation Pipeline")
     parser.add_argument(
         "--mode", 
-        choices=["web", "cli"],
+        choices=["web", "cli", "demo"],
         default="web",
-        help="Run mode: web (Streamlit UI) or cli (command line)"
+        help="Run mode: web (Streamlit UI), cli (command line), or demo (generate lineage events)"
     )
     parser.add_argument(
         "--log-level",
@@ -169,6 +202,8 @@ def main():
             run_streamlit_app()
         elif args.mode == "cli":
             run_cli_mode()
+        elif args.mode == "demo":
+            run_demo_mode()
     except KeyboardInterrupt:
         print("\n🛑 Application stopped by user")
     except Exception as e:

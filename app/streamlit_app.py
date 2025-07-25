@@ -37,8 +37,23 @@ class StreamlitUI:
     """Streamlit-based UI for the data pipeline"""
     
     def __init__(self):
-        self.pipeline = None
+        # Initialize session state for persistent pipeline
+        if 'pipeline' not in st.session_state:
+            st.session_state.pipeline = None
+        if 'lineage_events' not in st.session_state:
+            st.session_state.lineage_events = []
+        
         self.setup_page_config()
+    
+    @property
+    def pipeline(self):
+        """Get pipeline from session state"""
+        return st.session_state.pipeline
+    
+    @pipeline.setter
+    def pipeline(self, value):
+        """Set pipeline in session state"""
+        st.session_state.pipeline = value
     
     def setup_page_config(self):
         """Configure Streamlit page"""
@@ -51,10 +66,10 @@ class StreamlitUI:
     
     def initialize_pipeline(self):
         """Initialize the data pipeline"""
-        if self.pipeline is None:
+        if st.session_state.pipeline is None:
             with st.spinner("Initializing PySpark session..."):
                 try:
-                    self.pipeline = DataPipeline()
+                    st.session_state.pipeline = DataPipeline()
                     st.success("Pipeline initialized successfully!")
                 except Exception as e:
                     st.error(f"Failed to initialize pipeline: {str(e)}")
@@ -459,6 +474,94 @@ class StreamlitUI:
         """Render data lineage page"""
         st.title("🔗 Data Lineage")
         
+        # Initialize pipeline if needed
+        if not self.initialize_pipeline():
+            return
+        
+        # Demo buttons to generate lineage events
+        lineage_events = self.pipeline.get_lineage_logs() if self.pipeline else []
+        
+        if not lineage_events:
+            st.info("No lineage events recorded yet. Use the options below to generate sample lineage events:")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("🚀 Quick Demo", help="Load sample data to generate basic lineage events", key="quick_demo"):
+                    with st.spinner("Loading sample data..."):
+                        try:
+                            from src.sample_data_generator import SampleDataGenerator
+                            import os
+                            
+                            # Generate sample data if it doesn't exist
+                            if not os.path.exists("sample_data/bank_statement.csv"):
+                                generator = SampleDataGenerator()
+                                generator.generate_sample_datasets()
+                            
+                            # Load sample data to generate lineage events
+                            if os.path.exists("sample_data/bank_statement.csv"):
+                                df, event_id = self.pipeline.load_data("sample_data/bank_statement.csv", "csv")
+                                st.success(f"✅ Loaded bank statement - Generated lineage event: {event_id}")
+                            
+                            if os.path.exists("sample_data/general_ledger.csv"):
+                                df, event_id = self.pipeline.load_data("sample_data/general_ledger.csv", "csv")
+                                st.success(f"✅ Loaded general ledger - Generated lineage event: {event_id}")
+                                
+                            # Store events in session state
+                            st.session_state.lineage_events = self.pipeline.get_lineage_logs()
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"Error generating demo: {str(e)}")
+            
+            with col2:
+                if st.button("📊 Validation Demo", help="Run validation to generate validation lineage events", key="validation_demo"):
+                    with st.spinner("Running validation demo..."):
+                        try:
+                            # First load data if not already loaded
+                            if 'demo_bank_df' not in st.session_state:
+                                from src.sample_data_generator import SampleDataGenerator
+                                import os
+                                
+                                if not os.path.exists("sample_data/bank_statement.csv"):
+                                    generator = SampleDataGenerator()
+                                    generator.generate_sample_datasets()
+                                
+                                st.session_state.demo_bank_df, st.session_state.demo_bank_event_id = self.pipeline.load_data("sample_data/bank_statement.csv", "csv")
+                            
+                            # Run validation
+                            validation_rules = [
+                                {'name': 'transaction_id_not_null', 'type': 'not_null', 'column': 'transaction_id'},
+                                {'name': 'amount_not_null', 'type': 'not_null', 'column': 'amount'},
+                                {'name': 'amount_range', 'type': 'range', 'column': 'amount', 'min_value': -50000, 'max_value': 50000}
+                            ]
+                            
+                            results, validation_event_id = self.pipeline.run_validation(
+                                st.session_state.demo_bank_df, validation_rules, st.session_state.demo_bank_event_id
+                            )
+                            
+                            st.success(f"✅ Validation completed - Generated event: {validation_event_id}")
+                            st.info(f"Passed: {results['passed_rules']}, Failed: {results['failed_rules']}")
+                            
+                            # Store events in session state
+                            st.session_state.lineage_events = self.pipeline.get_lineage_logs()
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"Error running validation demo: {str(e)}")
+            
+            with col3:
+                if st.button("🔄 Reset Pipeline", help="Clear all lineage events and start fresh", key="reset_pipeline"):
+                    st.session_state.pipeline = None
+                    st.session_state.lineage_events = []
+                    if 'demo_bank_df' in st.session_state:
+                        del st.session_state.demo_bank_df
+                    if 'demo_bank_event_id' in st.session_state:
+                        del st.session_state.demo_bank_event_id
+                    st.success("Pipeline reset successfully!")
+                    st.rerun()
+        
+        # Display lineage events
         if self.pipeline:
             lineage_events = self.pipeline.get_lineage_logs()
             
@@ -472,7 +575,11 @@ class StreamlitUI:
                 with col1:
                     st.metric("Total Events", summary['total_events'])
                 with col2:
-                    st.metric("Latest Event", summary['latest_event']['timestamp'][:19])
+                    # Safe access to latest event timestamp
+                    latest_event_time = "N/A"
+                    if 'latest_event' in summary and summary['latest_event'] and 'timestamp' in summary['latest_event']:
+                        latest_event_time = summary['latest_event']['timestamp'][:19]
+                    st.metric("Latest Event", latest_event_time)
                 
                 # Event type breakdown
                 event_types_df = pd.DataFrame(

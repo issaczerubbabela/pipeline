@@ -102,14 +102,38 @@ class DataLineageTracker:
         if not self.lineage_events:
             return {"total_events": 0}
         
+        # Ensure we're working with a list of dictionaries
+        events_list = list(self.lineage_events) if hasattr(self.lineage_events, '__iter__') else []
+        
+        if not events_list:
+            return {"total_events": 0}
+        
         summary = {
-            "total_events": len(self.lineage_events),
-            "event_types": {},
-            "latest_event": max(self.lineage_events, key=lambda x: x['timestamp'])
+            "total_events": len(events_list),
+            "event_types": {}
         }
         
-        for event in self.lineage_events:
-            event_type = event['event_type']
-            summary["event_types"][event_type] = summary["event_types"].get(event_type, 0) + 1
+        # Find latest event safely
+        try:
+            latest_event = None
+            latest_timestamp = None
+            
+            for event in events_list:
+                if isinstance(event, dict) and 'timestamp' in event:
+                    event_timestamp = event['timestamp']
+                    if latest_timestamp is None or event_timestamp > latest_timestamp:
+                        latest_timestamp = event_timestamp
+                        latest_event = event
+            
+            if latest_event:
+                summary["latest_event"] = latest_event
+        except Exception as e:
+            self.logger.warning(f"Error finding latest event: {e}")
+        
+        # Count event types
+        for event in events_list:
+            if isinstance(event, dict) and 'event_type' in event:
+                event_type = event['event_type']
+                summary["event_types"][event_type] = summary["event_types"].get(event_type, 0) + 1
         
         return summary

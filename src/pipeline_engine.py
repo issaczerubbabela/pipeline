@@ -2,7 +2,10 @@
 try:
     from . import distutils_fix
 except ImportError:
-    pass
+    try:
+        import distutils_fix
+    except ImportError:
+        pass
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
@@ -12,7 +15,12 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from functools import reduce
-from data_lineage import DataLineageTracker
+
+# Handle both relative and absolute imports
+try:
+    from .data_lineage import DataLineageTracker
+except ImportError:
+    from data_lineage import DataLineageTracker
 
 class ValidationEngine:
     """Handles data validation with configurable rules"""
