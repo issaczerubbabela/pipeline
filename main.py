@@ -100,12 +100,71 @@ def run_cli_mode():
             col("debit_amount") - col("credit_amount")
         )
         
-        # Run reconciliation
+        # Show examples of different column comparison options
+        print("\n💡 Available column comparison formats:")
+        examples = pipeline.get_column_comparison_examples()
+        print(f"   • Exact match (same name): '{examples['exact_match_same_name']}'")
+        print(f"   • Different column names: '{examples['exact_match_different_names']}'")
+        print(f"   • Numeric with tolerance: '{examples['numeric_with_tolerance']}'")
+        print(f"   • Absolute value (ignore sign): '{examples['absolute_value_comparison']}'")
+        print(f"   • Opposite signs (+ vs -): '{examples['opposite_sign_comparison']}'")
+        print(f"   • Text comparison: '{examples['string_comparison']}'")
+        
+        # Option 1: Basic comparison (your original approach)
+        basic_comparisons = ['amount:net_amount']
+        
+        # Option 2: Enhanced comparisons with actual available columns
+        enhanced_comparisons = [
+            'amount:net_amount:abs:0.01',           # Amount comparison (ignore sign, 1 cent tolerance)
+            'currency:currency',                    # Currency comparison (same name in both)
+            'description:description',              # Description comparison (same name in both) 
+            'transaction_date:posting_date',        # Date fields (different names)
+            'transaction_type:account_name',        # Transaction type vs account name
+            'channel:source_document'               # Channel vs source document
+        ]
+        
+        # Option 3: Test different column combinations
+        test_comparisons = [
+            'amount:net_amount:abs:0.01',           # Core amount comparison
+            'transaction_id:gl_transaction_id',     # ID comparison (different names)
+            'balance:debit_amount:abs',             # Balance vs debit amount
+            'currency:currency',                    # Same column name
+            'channel:account_code'                  # Channel vs account code
+        ]
+        
+        # Option 4: Opposite sign comparison (when systems use different conventions)
+        opposite_sign_comparisons = [
+            'amount:net_amount:opposite:0.01',      # Expect opposite signs (bank: +100, GL: -100)
+            'currency:currency',                    # Currency should match exactly
+            'description:description'               # Description comparison
+        ]
+        
+        # Option 5: Using helper method for complex scenarios
+        advanced_comparisons = [
+            pipeline.create_column_comparison('amount', 'net_amount', 'abs', 0.01),        # Absolute value
+            pipeline.create_column_comparison('currency', 'currency', 'exact'),            # Exact match
+            pipeline.create_column_comparison('transaction_date', 'posting_date', 'exact') # Date comparison
+        ]
+        
+        # Choose which comparison set to use based on your data characteristics
+        print(f"\n🔧 Available comparison strategies:")
+        print(f"   1. Enhanced (real columns): {enhanced_comparisons}")
+        print(f"   2. Test combinations: {test_comparisons}")
+        print(f"   3. Opposite signs: {opposite_sign_comparisons}")
+        print(f"   4. Advanced (helper methods): {len(advanced_comparisons)} comparisons")
+        
+        # For demonstration, let's use the enhanced comparisons with real column names
+        print(f"\n🔧 Using enhanced column comparisons with real column names:")
+        selected_comparisons = enhanced_comparisons
+        for comp in selected_comparisons:
+            print(f"   • {comp}")
+
+        # Run reconciliation with enhanced column comparisons
         print("🔄 Running reconciliation...")
         reconciliation_results = pipeline.run_reconciliation(
             bank_df, gl_df_prepared,
             join_keys=['reference_number'],
-            compare_columns=['amount:net_amount'],  # bank_amount:gl_net_amount mapping
+            compare_columns=selected_comparisons,
             source1_event_id=bank_event_id,
             source2_event_id=gl_event_id
         )

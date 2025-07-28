@@ -346,47 +346,123 @@ class StreamlitUI:
             st.warning("Please upload both datasets first!")
             return
         
-        # Get common columns
-        df1_cols = set(st.session_state['df1'].columns)
-        df2_cols = set(st.session_state['df2'].columns)
-        common_cols = list(df1_cols.intersection(df2_cols))
-        
-        if not common_cols:
-            st.error("No common columns found between datasets!")
-            return
+        # Get all columns from both datasets
+        df1_cols = list(st.session_state['df1'].columns)
+        df2_cols = list(st.session_state['df2'].columns)
+        common_cols = list(set(df1_cols).intersection(set(df2_cols)))
         
         # Configure reconciliation
         st.header("Configure Reconciliation")
         
-        col1, col2 = st.columns(2)
+        # Mode selection
+        mode = st.radio(
+            "Reconciliation Mode",
+            ["Simple (Common Columns)", "Advanced (Column Mapping)"],
+            help="Simple mode uses columns with the same names. Advanced mode allows mapping between different column names."
+        )
         
-        with col1:
+        if mode == "Simple (Common Columns)":
+            if not common_cols:
+                st.error("No common columns found between datasets!")
+                return
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Join Keys")
+                join_keys = st.multiselect(
+                    "Select columns to join on",
+                    common_cols,
+                    help="These columns will be used to match records between datasets"
+                )
+            
+            with col2:
+                st.subheader("Compare Columns")
+                compare_columns = st.multiselect(
+                    "Select columns to compare",
+                    [col for col in common_cols if col not in join_keys],
+                    help="These columns will be compared for differences in matched records"
+                )
+            
+            column_mappings = []
+            
+        else:  # Advanced mode
             st.subheader("Join Keys")
             join_keys = st.multiselect(
-                "Select columns to join on",
+                "Select common columns to join on",
                 common_cols,
-                help="These columns will be used to match records between datasets"
+                help="These columns must have the same name in both datasets"
             )
+            
+            st.subheader("Column Mappings")
+            st.info("Map columns from Dataset 1 to Dataset 2 for comparison. Format: col1:col2:type:tolerance")
+            
+            # Initialize column mappings in session state
+            if 'column_mappings' not in st.session_state:
+                st.session_state['column_mappings'] = []
+            
+            # Add new mapping
+            with st.expander("➕ Add Column Mapping"):
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    source_col = st.selectbox("Dataset 1 Column", df1_cols, key="source_col")
+                with col2:
+                    target_col = st.selectbox("Dataset 2 Column", df2_cols, key="target_col")
+                with col3:
+                    comparison_type = st.selectbox(
+                        "Comparison Type",
+                        ["exact", "abs", "opposite"],
+                        help="exact: must match exactly, abs: compare absolute values, opposite: compare with opposite signs"
+                    )
+                with col4:
+                    tolerance = st.number_input("Tolerance", min_value=0.0, value=0.01, step=0.01, help="For numeric comparisons")
+                
+                if st.button("Add Mapping"):
+                    mapping = f"{source_col}:{target_col}:{comparison_type}:{tolerance}"
+                    st.session_state['column_mappings'].append(mapping)
+                    st.success(f"Added mapping: {mapping}")
+                    st.rerun()
+            
+            # Display current mappings
+            if st.session_state['column_mappings']:
+                st.subheader("Current Column Mappings")
+                for i, mapping in enumerate(st.session_state['column_mappings']):
+                    col1, col2 = st.columns([4, 1])
+                    with col1:
+                        st.text(mapping)
+                    with col2:
+                        if st.button("Remove", key=f"remove_{i}"):
+                            st.session_state['column_mappings'].pop(i)
+                            st.rerun()
+            
+            column_mappings = st.session_state['column_mappings']
+            compare_columns = []  # Not used in advanced mode
         
-        with col2:
-            st.subheader("Compare Columns")
-            compare_columns = st.multiselect(
-                "Select columns to compare",
-                [col for col in common_cols if col not in join_keys],
-                help="These columns will be compared for differences in matched records"
-            )
+        # Run reconciliation button
+        can_run = join_keys and (compare_columns or column_mappings)
         
-        if st.button("🔍 Run Reconciliation") and join_keys:
+        if st.button("🔍 Run Reconciliation", disabled=not can_run):
             with st.spinner("Running reconciliation..."):
                 try:
-                    reconciliation_results = self.pipeline.run_reconciliation(
-                        st.session_state['df1'],
-                        st.session_state['df2'],
-                        join_keys,
-                        compare_columns,
-                        st.session_state['source1_event_id'],
-                        st.session_state['source2_event_id']
-                    )
+                    if mode == "Simple (Common Columns)":
+                        reconciliation_results = self.pipeline.run_reconciliation(
+                            st.session_state['df1'],
+                            st.session_state['df2'],
+                            join_keys,
+                            compare_columns,
+                            st.session_state['source1_event_id'],
+                            st.session_state['source2_event_id']
+                        )
+                    else:  # Advanced mode
+                        reconciliation_results = self.pipeline.run_reconciliation(
+                            st.session_state['df1'],
+                            st.session_state['df2'],
+                            join_keys,
+                            column_mappings,
+                            st.session_state['source1_event_id'],
+                            st.session_state['source2_event_id']
+                        )
                     
                     st.session_state['reconciliation_results'] = reconciliation_results
                     
@@ -395,6 +471,7 @@ class StreamlitUI:
                     
                 except Exception as e:
                     st.error(f"Reconciliation failed: {str(e)}")
+                    st.error(traceback.format_exc())
     
     def display_reconciliation_results(self, reconciliation_results):
         """Display reconciliation results"""

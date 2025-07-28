@@ -198,25 +198,110 @@ class ReconciliationEngine:
         discrepancies = None
         if compare_columns and matches.count() > 0:
             discrepancy_conditions = []
+            comparison_details = []
+            
             for col_spec in compare_columns:
-                # Handle column mapping format: "col1:col2" or just "col1"
-                if ':' in col_spec:
-                    col1_name, col2_name = col_spec.split(':')
-                else:
-                    col1_name = col2_name = col_spec
+                # Enhanced column mapping format support:
+                # - "col1:col2" - exact comparison
+                # - "col1:col2:tolerance" - numeric comparison with tolerance
+                # - "col1:col2:abs" - absolute value comparison (ignores sign)
+                # - "col1:col2:abs:tolerance" - absolute value with tolerance
+                # - "col1:col2:opposite" - opposite sign comparison (one positive, one negative)
+                # - "col1:col2:opposite:tolerance" - opposite sign with tolerance
                 
-                # Handle prefixed column names
-                bank_col = f"bank_{col1_name}" if f"bank_{col1_name}" in [c for c in matches.columns] else col1_name
-                gl_col = f"gl_{col2_name}" if f"gl_{col2_name}" in [c for c in matches.columns] else col2_name
+                parts = col_spec.split(':')
+                col1_name = parts[0]
+                col2_name = parts[1] if len(parts) >= 2 else parts[0]
                 
-                discrepancy_conditions.append(
-                    col(bank_col) != col(gl_col)
-                )
+                # Parse comparison type and tolerance
+                comparison_type = "exact"  # default
+                tolerance = None
+                
+                if len(parts) >= 3:
+                    if parts[2] in ["abs", "absolute"]:
+                        comparison_type = "abs"
+                        tolerance = float(parts[3]) if len(parts) >= 4 else None
+                    elif parts[2] in ["opposite", "reverse", "inv"]:
+                        comparison_type = "opposite"
+                        tolerance = float(parts[3]) if len(parts) >= 4 else None
+                    else:
+                        # Assume it's a tolerance value
+                        try:
+                            tolerance = float(parts[2])
+                            comparison_type = "exact"
+                        except ValueError:
+                            self.logger.warning(f"Unknown comparison type: {parts[2]}, using exact")
+                
+                # Handle prefixed column names - improved logic
+                available_columns = matches.columns
+                self.logger.debug(f"Available columns in matches: {available_columns}")
+                
+                # Try different column name variations
+                possible_bank_cols = [f"bank_{col1_name}", col1_name]
+                possible_gl_cols = [f"gl_{col2_name}", col2_name]
+                
+                bank_col = None
+                gl_col = None
+                
+                # Find the actual column name for bank
+                for candidate in possible_bank_cols:
+                    if candidate in available_columns:
+                        bank_col = candidate
+                        break
+                
+                # Find the actual column name for GL
+                for candidate in possible_gl_cols:
+                    if candidate in available_columns:
+                        gl_col = candidate
+                        break
+                
+                if bank_col is None:
+                    self.logger.warning(f"Bank column not found. Tried: {possible_bank_cols}. Available: {available_columns}")
+                    continue
+                    
+                if gl_col is None:
+                    self.logger.warning(f"GL column not found. Tried: {possible_gl_cols}. Available: {available_columns}")
+                    continue
+                
+                self.logger.info(f"Comparing {bank_col} vs {gl_col} using {comparison_type}")
+                
+                # Create comparison condition based on type and tolerance
+                if comparison_type == "abs":
+                    # Absolute value comparison - ignores sign differences
+                    if tolerance is not None:
+                        discrepancy_condition = abs(abs(col(bank_col)) - abs(col(gl_col))) > tolerance
+                    else:
+                        discrepancy_condition = abs(col(bank_col)) != abs(col(gl_col))
+                        
+                elif comparison_type == "opposite":
+                    # Opposite sign comparison - expects one positive, one negative
+                    if tolerance is not None:
+                        discrepancy_condition = abs(col(bank_col) + col(gl_col)) > tolerance
+                    else:
+                        discrepancy_condition = col(bank_col) != -col(gl_col)
+                        
+                else:  # exact comparison
+                    if tolerance is not None:
+                        discrepancy_condition = abs(col(bank_col) - col(gl_col)) > tolerance
+                    else:
+                        discrepancy_condition = col(bank_col) != col(gl_col)
+                
+                discrepancy_conditions.append(discrepancy_condition)
+                comparison_details.append({
+                    'bank_column': bank_col,
+                    'gl_column': gl_col,
+                    'comparison_type': comparison_type,
+                    'tolerance': tolerance,
+                    'mapping': col_spec
+                })
             
             if discrepancy_conditions:
                 discrepancies = matches.filter(
                     reduce(lambda a, b: a | b, discrepancy_conditions)
                 )
+                
+                # Log comparison details for debugging
+                self.logger.info(f"Column comparisons configured: {comparison_details}")
         
         # Calculate reconciliation results
         match_results = {
@@ -320,6 +405,60 @@ class DataPipeline:
         """Run validation on dataset"""
         return self.validation_engine.validate_data(df, validation_rules, source_event_id)
     
+    def create_column_comparison(self, bank_column: str, gl_column: str, 
+                               comparison_type: str = "exact", tolerance: float = None) -> str:
+        """
+        Helper method to create column comparison specifications
+        
+        Args:
+            bank_column: Column name from bank statement
+            gl_column: Column name from general ledger
+            comparison_type: Type of comparison ("exact", "abs", "opposite")
+            tolerance: Optional tolerance for numeric comparisons
+            
+        Returns:
+            String specification for column comparison
+        """
+        if comparison_type == "abs":
+            if tolerance is not None:
+                return f"{bank_column}:{gl_column}:abs:{tolerance}"
+            else:
+                return f"{bank_column}:{gl_column}:abs"
+        elif comparison_type == "opposite":
+            if tolerance is not None:
+                return f"{bank_column}:{gl_column}:opposite:{tolerance}"
+            else:
+                return f"{bank_column}:{gl_column}:opposite"
+        else:  # exact
+            if tolerance is not None:
+                return f"{bank_column}:{gl_column}:{tolerance}"
+            else:
+                return f"{bank_column}:{gl_column}"
+    
+    def get_column_comparison_examples(self) -> dict:
+        """
+        Get examples of different column comparison formats
+        
+        Returns:
+            Dictionary with examples and descriptions
+        """
+        return {
+            "exact_match_same_name": "amount",
+            "exact_match_different_names": "bank_amount:gl_amount", 
+            "numeric_with_tolerance": "amount:net_amount:0.01",
+            "absolute_value_comparison": "amount:net_amount:abs",
+            "absolute_with_tolerance": "amount:net_amount:abs:0.01",
+            "opposite_sign_comparison": "amount:net_amount:opposite",
+            "opposite_with_tolerance": "amount:net_amount:opposite:0.01",
+            "string_comparison": "description:memo",
+            "currency_comparison": "bank_currency:gl_currency",
+            "multiple_comparisons": [
+                "amount:net_amount:abs:0.01",      # Absolute value with tolerance
+                "bank_currency:gl_currency",        # Exact match different names
+                "bank_description:gl_description"   # Text comparison
+            ]
+        }
+
     def run_reconciliation(self, df1, df2, join_keys: List[str], 
                           compare_columns: List[str], 
                           source1_event_id: str, source2_event_id: str):
