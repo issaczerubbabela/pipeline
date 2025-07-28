@@ -68,26 +68,44 @@ def run_cli_mode():
         print("📊 Loading general ledger...")
         gl_df, gl_event_id = pipeline.load_data(sample_paths['general_ledger'])
         
-        # Define validation rules
-        validation_rules = [
+        # Define validation rules for bank statement
+        bank_validation_rules = [
             {'name': 'transaction_id_not_null', 'type': 'not_null', 'column': 'transaction_id'},
             {'name': 'amount_not_null', 'type': 'not_null', 'column': 'amount'},
             {'name': 'amount_range', 'type': 'range', 'column': 'amount', 'min_value': -10000, 'max_value': 50000}
         ]
         
+        # Define validation rules for general ledger
+        gl_validation_rules = [
+            {'name': 'gl_transaction_id_not_null', 'type': 'not_null', 'column': 'gl_transaction_id'},
+            {'name': 'debit_amount_not_null', 'type': 'not_null', 'column': 'debit_amount'},
+            {'name': 'credit_amount_not_null', 'type': 'not_null', 'column': 'credit_amount'}
+        ]
+        
         # Run validation
         print("✅ Running validation on bank statement...")
-        bank_validation, _ = pipeline.run_validation(bank_df, validation_rules, bank_event_id)
+        bank_validation, _ = pipeline.run_validation(bank_df, bank_validation_rules, bank_event_id)
         
         print("✅ Running validation on general ledger...")
-        gl_validation, _ = pipeline.run_validation(gl_df, validation_rules[:2], gl_event_id)  # Skip amount range for GL
+        gl_validation, _ = pipeline.run_validation(gl_df, gl_validation_rules, gl_event_id)
+        
+        # Prepare GL data for reconciliation - create net amount column
+        print("🔄 Preparing data for reconciliation...")
+        
+        # For GL: net_amount = debit_amount - credit_amount
+        # (positive = debit, negative = credit, matching typical bank statement conventions)
+        from pyspark.sql.functions import col, when
+        gl_df_prepared = gl_df.withColumn(
+            "net_amount", 
+            col("debit_amount") - col("credit_amount")
+        )
         
         # Run reconciliation
         print("🔄 Running reconciliation...")
         reconciliation_results = pipeline.run_reconciliation(
-            bank_df, gl_df,
+            bank_df, gl_df_prepared,
             join_keys=['reference_number'],
-            compare_columns=['amount'],
+            compare_columns=['amount:net_amount'],  # bank_amount:gl_net_amount mapping
             source1_event_id=bank_event_id,
             source2_event_id=gl_event_id
         )
@@ -127,16 +145,21 @@ def run_cli_mode():
         output_dir = "output"
         os.makedirs(output_dir, exist_ok=True)
         
-        # Export reconciliation results
+        # Export reconciliation results - skip export for now due to Hadoop/Windows issues
         if reconciliation_results['matched_df']:
-            pipeline.export_results(
-                reconciliation_results['matched_df'], 
-                os.path.join(output_dir, "matched_records"),
-                "csv"
-            )
+            print("📊 Matched records DataFrame is ready for export")
+            print("   (Export temporarily disabled due to Hadoop/Windows compatibility)")
+            # matched_df = reconciliation_results['matched_df']
+            # pipeline.export_results(
+            #     matched_df, 
+            #     os.path.join(output_dir, "matched_records"),
+            #     "csv"
+            # )
         
-        # Export lineage
-        pipeline.lineage_tracker.export_lineage(os.path.join(output_dir, "lineage"))
+        # Export lineage - skip for now due to compatibility issues
+        print("🔗 Lineage data is ready for export")
+        print("   (Lineage export temporarily disabled due to compatibility)")
+        # pipeline.lineage_tracker.export_lineage(os.path.join(output_dir, "lineage"))
         
         print("✅ Pipeline completed successfully!")
         

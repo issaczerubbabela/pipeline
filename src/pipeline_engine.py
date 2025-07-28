@@ -133,9 +133,30 @@ class ReconciliationEngine:
                           source1_event_id: str, source2_event_id: str):
         """Reconcile two datasets"""
         
-        # Prepare dataframes with source indicators
-        df1_prepared = df1.withColumn("_source", lit("source1"))
-        df2_prepared = df2.withColumn("_source", lit("source2"))
+        # Remove any existing _source columns to avoid conflicts
+        if "_source" in df1.columns:
+            df1 = df1.drop("_source")
+        if "_source" in df2.columns:
+            df2 = df2.drop("_source")
+        
+        # Prepare dataframes with source indicators and handle column name conflicts
+        # For join keys, keep them as-is. For other columns, prefix to avoid conflicts
+        def prepare_columns(df, prefix, join_keys):
+            cols = []
+            for c in df.columns:
+                if c in join_keys:
+                    # Keep join keys as-is for the join
+                    cols.append(col(c))
+                else:
+                    # Prefix other columns to avoid conflicts
+                    cols.append(col(c).alias(f"{prefix}_{c}"))
+            return cols
+        
+        df1_cols = prepare_columns(df1, "bank", join_keys)
+        df2_cols = prepare_columns(df2, "gl", join_keys)
+        
+        df1_prepared = df1.select(*df1_cols).withColumn("_bank_source", lit("bank"))
+        df2_prepared = df2.select(*df2_cols).withColumn("_gl_source", lit("gl"))
         
         # Full outer join on key columns
         join_condition = [df1_prepared[key] == df2_prepared[key] for key in join_keys]
@@ -145,26 +166,51 @@ class ReconciliationEngine:
             "full_outer"
         )
         
+        # Select specific columns to avoid duplicates - keep join keys from left side only
+        columns_to_select = []
+        
+        # Add all columns from left side (s1)
+        for col_name in df1_prepared.columns:
+            columns_to_select.append(f"s1.{col_name}")
+            
+        # Add columns from right side (s2) except join keys
+        for col_name in df2_prepared.columns:
+            if col_name not in join_keys:
+                columns_to_select.append(f"s2.{col_name}")
+        
+        # Select the specific columns to create clean DataFrame
+        joined_df = joined_df.select(*[col(c) for c in columns_to_select])
+        
         # Identify matches, missing in source1, missing in source2
         matches = joined_df.filter(
-            col("s1._source").isNotNull() & col("s2._source").isNotNull()
+            col("_bank_source").isNotNull() & col("_gl_source").isNotNull()
         )
         
         missing_in_s1 = joined_df.filter(
-            col("s1._source").isNull() & col("s2._source").isNotNull()
+            col("_bank_source").isNull() & col("_gl_source").isNotNull()
         )
         
         missing_in_s2 = joined_df.filter(
-            col("s1._source").isNotNull() & col("s2._source").isNull()
+            col("_bank_source").isNotNull() & col("_gl_source").isNull()
         )
         
         # Check for discrepancies in matching records
         discrepancies = None
         if compare_columns and matches.count() > 0:
             discrepancy_conditions = []
-            for col_name in compare_columns:
+            for col_spec in compare_columns:
+                # Handle column mapping format: "col1:col2" or just "col1"
+                if ':' in col_spec:
+                    col1_name, col2_name = col_spec.split(':')
+                else:
+                    col1_name = col2_name = col_spec
+                
+                # Handle prefixed column names
+                bank_col = f"bank_{col1_name}" if f"bank_{col1_name}" in [c for c in matches.columns] else col1_name
+                gl_col = f"gl_{col2_name}" if f"gl_{col2_name}" in [c for c in matches.columns] else col2_name
+                
                 discrepancy_conditions.append(
-                    col(f"s1.{col_name}") != col(f"s2.{col_name}")
+                    col(bank_col) != col(gl_col)
                 )
             
             if discrepancy_conditions:
